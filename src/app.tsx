@@ -54,6 +54,20 @@ interface GPSInfo {
     bestSatellite: { prn: string, ss: number } | null;
 }
 
+interface PPSInfo {
+    available: boolean;
+    offset: string;
+    jitter: string;
+    frequency: string;
+    skew: string;
+    stratum: string;
+    refId: string;
+    systemTime: string;
+    lastOffset: string;
+    rmsOffset: string;
+    updateInterval: string;
+}
+
 export const Application = () => {
     const [hostname, setHostname] = useState('');
     const [sources, setSources] = useState<NTPSource[]>([]);
@@ -76,6 +90,19 @@ export const Application = () => {
         satellitesVisible: 0,
         satellitesUsed: 0,
         bestSatellite: null
+    });
+    const [ppsInfo, setPpsInfo] = useState<PPSInfo>({
+        available: false,
+        offset: 'N/A',
+        jitter: 'N/A',
+        frequency: 'N/A',
+        skew: 'N/A',
+        stratum: 'N/A',
+        refId: 'N/A',
+        systemTime: 'N/A',
+        lastOffset: 'N/A',
+        rmsOffset: 'N/A',
+        updateInterval: 'N/A'
     });
     const [loading, setLoading] = useState(false);
 
@@ -197,6 +224,71 @@ export const Application = () => {
                     }
                 }
                 setClients(clientData);
+            });
+            
+            // Get PPS and chrony tracking info
+            const trackingProc = cockpit.spawn(['chronyc', 'tracking'], { superuser: 'try' });
+            trackingProc.done((data) => {
+                const lines = data.split('\n');
+                const trackingData: any = {};
+                
+                for (const line of lines) {
+                    if (line.includes(':')) {
+                        const [key, value] = line.split(':').map(s => s.trim());
+                        trackingData[key] = value;
+                    }
+                }
+                
+                // Get source statistics for PPS jitter
+                const sourcestatsProc = cockpit.spawn(['chronyc', 'sourcestats'], { superuser: 'try' });
+                sourcestatsProc.done((statsData) => {
+                    const statsLines = statsData.split('\n');
+                    let gpsStats = null;
+                    
+                    for (const line of statsLines) {
+                        if (line.includes('GPS') && !line.startsWith('Name')) {
+                            const parts = line.split(/\s+/).filter(p => p);
+                            if (parts.length >= 8) {
+                                gpsStats = {
+                                    name: parts[0],
+                                    offset: parts[6],
+                                    stdDev: parts[7]
+                                };
+                            }
+                            break;
+                        }
+                    }
+                    
+                    setPpsInfo({
+                        available: !!trackingData['Reference ID'],
+                        offset: gpsStats?.offset || trackingData['Last offset'] || 'N/A',
+                        jitter: gpsStats?.stdDev || 'N/A',
+                        frequency: trackingData['Frequency'] || 'N/A',
+                        skew: trackingData['Skew'] || 'N/A',
+                        stratum: trackingData['Stratum'] || 'N/A',
+                        refId: trackingData['Reference ID'] || 'N/A',
+                        systemTime: trackingData['System time'] || 'N/A',
+                        lastOffset: trackingData['Last offset'] || 'N/A',
+                        rmsOffset: trackingData['RMS offset'] || 'N/A',
+                        updateInterval: trackingData['Update interval'] || 'N/A'
+                    });
+                }).fail(() => {
+                    // sourcestats failed, use tracking data only
+                    setPpsInfo(prev => ({
+                        ...prev,
+                        available: !!trackingData['Reference ID'],
+                        frequency: trackingData['Frequency'] || 'N/A',
+                        skew: trackingData['Skew'] || 'N/A',
+                        stratum: trackingData['Stratum'] || 'N/A',
+                        refId: trackingData['Reference ID'] || 'N/A',
+                        systemTime: trackingData['System time'] || 'N/A',
+                        lastOffset: trackingData['Last offset'] || 'N/A',
+                        rmsOffset: trackingData['RMS offset'] || 'N/A',
+                        updateInterval: trackingData['Update interval'] || 'N/A'
+                    }));
+                });
+            }).fail(() => {
+                setPpsInfo(prev => ({ ...prev, available: false }));
             });
             
             setLoading(false);
@@ -334,7 +426,54 @@ export const Application = () => {
                 </Card>
             </GridItem>
             
-            <GridItem span={6}>
+            <GridItem span={4}>
+                <Card>
+                    <CardTitle>PPS Accuracy</CardTitle>
+                    <CardBody>
+                        <Alert
+                            variant={ppsInfo.available ? 'success' : 'danger'}
+                            title={`PPS: ${ppsInfo.available ? 'Active' : 'Not Available'}`}
+                        />
+                        {ppsInfo.available && (
+                            <div style={{marginTop: '10px', fontSize: '0.85em'}}>
+                                <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '8px', marginBottom: '8px'}}>
+                                    <div>
+                                        <strong>Stratum:</strong> {ppsInfo.stratum}<br/>
+                                        <strong>Ref ID:</strong> {ppsInfo.refId}<br/>
+                                        <strong>Frequency:</strong> {ppsInfo.frequency}
+                                    </div>
+                                    <div>
+                                        <strong>System Time:</strong><br/>
+                                        <span style={{fontSize: '0.9em'}}>{ppsInfo.systemTime}</span><br/>
+                                        <strong>Update:</strong> {ppsInfo.updateInterval}
+                                    </div>
+                                </div>
+                                <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', fontSize: '0.8em'}}>
+                                    <div style={{textAlign: 'center', padding: '4px', backgroundColor: '#f8f9fa', borderRadius: '3px'}}>
+                                        <strong>Last Offset</strong><br/>
+                                        <span style={{color: '#007bff'}}>{ppsInfo.lastOffset}</span>
+                                    </div>
+                                    <div style={{textAlign: 'center', padding: '4px', backgroundColor: '#f8f9fa', borderRadius: '3px'}}>
+                                        <strong>RMS Offset</strong><br/>
+                                        <span style={{color: '#28a745'}}>{ppsInfo.rmsOffset}</span>
+                                    </div>
+                                    <div style={{textAlign: 'center', padding: '4px', backgroundColor: '#f8f9fa', borderRadius: '3px'}}>
+                                        <strong>Skew</strong><br/>
+                                        <span style={{color: '#dc3545'}}>{ppsInfo.skew}</span>
+                                    </div>
+                                </div>
+                                {ppsInfo.jitter !== 'N/A' && (
+                                    <div style={{marginTop: '8px', textAlign: 'center', padding: '4px', backgroundColor: '#e9ecef', borderRadius: '3px'}}>
+                                        <strong>GPS Jitter:</strong> <span style={{color: '#6c757d'}}>{ppsInfo.jitter}</span>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+                    </CardBody>
+                </Card>
+            </GridItem>
+            
+            <GridItem span={8}>
                 <Card>
                     <CardTitle>NTP Clients ({clients.length})</CardTitle>
                     <CardBody style={{maxHeight: '300px', overflowY: 'auto'}}>
