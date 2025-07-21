@@ -426,7 +426,7 @@ export const Application = () => {
                 </Card>
             </GridItem>
             
-            <GridItem span={4}>
+            <GridItem span={6}>
                 <Card>
                     <CardTitle>PPS Accuracy</CardTitle>
                     <CardBody>
@@ -473,7 +473,7 @@ export const Application = () => {
                 </Card>
             </GridItem>
             
-            <GridItem span={8}>
+            <GridItem span={12}>
                 <Card>
                     <CardTitle>NTP Clients ({clients.length})</CardTitle>
                     <CardBody style={{maxHeight: '300px', overflowY: 'auto'}}>
