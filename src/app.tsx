@@ -17,9 +17,15 @@ const _ = cockpit.gettext;
 interface NTPSource {
     name: string;
     stratum: string;
-    offset: string;
-    status: string;
+    poll: string;
     reach: string;
+    lastRx: string;
+    lastSample: string;
+    status: string;
+    offset: string;
+    type: string;
+    reachabilityPercent: number;
+    lastContact: string;
 }
 
 interface NTPClient {
@@ -115,16 +121,51 @@ export const Application = () => {
                 const sourceData: NTPSource[] = [];
                 
                 for (const line of lines) {
-                    if (line.startsWith('^') || line.startsWith('#')) {
+                    if (line.startsWith('^') || line.startsWith('#') || line.startsWith('*') || line.startsWith('+') || line.startsWith('-') || line.startsWith('x') || line.startsWith('~') || line.startsWith('?')) {
                         const parts = line.split(/\s+/);
                         if (parts.length >= 7) {
+                            const reach = parts[4] || '0';
+                            const reachBinary = parseInt(reach, 8).toString(2).padStart(8, '0');
+                            const reachabilityPercent = (reachBinary.split('1').length - 1) / 8 * 100;
+                            
+                            // Calculate last contact time based on reach register
+                            let lastContactSec = 0;
+                            for (let i = 0; i < 8; i++) {
+                                if (reachBinary[7 - i] === '1') {
+                                    lastContactSec = i * Math.pow(2, parseInt(parts[3] || '6'));
+                                    break;
+                                }
+                            }
+                            
+                            const lastContact = lastContactSec === 0 ? 'Now' : 
+                                lastContactSec < 60 ? `${lastContactSec}s ago` :
+                                lastContactSec < 3600 ? `${Math.round(lastContactSec / 60)}m ago` :
+                                `${Math.round(lastContactSec / 3600)}h ago`;
+                            
+                            // Parse the "Last sample" field which contains the offset
+                            // Format: xxxx[yyyy] +/- zzzz where xxxx is the adjusted offset
+                            let offset = 'N/A';
+                            const lastSampleIndex = parts.findIndex(part => part.includes('[') || part.includes('us') || part.includes('ms') || part.includes('ns'));
+                            if (lastSampleIndex !== -1) {
+                                // Find the offset value (first part before the bracket)
+                                const offsetMatch = parts[lastSampleIndex].match(/^([+-]?[0-9.]+[a-zA-Z]+)/);
+                                if (offsetMatch) {
+                                    offset = offsetMatch[1];
+                                }
+                            }
+                            
                             sourceData.push({
                                 name: parts[1] || 'Unknown',
                                 stratum: parts[2] || '0',
                                 poll: parts[3] || '0',
-                                reach: parts[4] || '0',
+                                reach: reach,
+                                lastRx: parts[5] || '-',
+                                lastSample: parts.slice(6).join(' ') || '0',
                                 status: line[0],
-                                offset: parts[6] || '0'
+                                offset: offset,
+                                type: line[0] === '#' ? 'Local Reference' : 'Network Source',
+                                reachabilityPercent: Math.round(reachabilityPercent),
+                                lastContact: lastContact
                             });
                         }
                     }
@@ -516,15 +557,62 @@ export const Application = () => {
                             <List>
                                 {sources.map((source, index) => (
                                     <ListItem key={index}>
-                                        <Alert
-                                            variant={getStatusVariant(source.status)}
-                                            isInline
-                                            title={`${source.name} (Stratum ${source.stratum})`}
-                                        >
-                                            Status: {getStatusText(source.status)} | 
-                                            Offset: {source.offset} | 
-                                            Reachability: {source.reach}
-                                        </Alert>
+                                        <div style={{border: '1px solid #e6e6e6', borderRadius: '8px', padding: '12px', marginBottom: '8px'}}>
+                                            <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '8px'}}>
+                                                <div>
+                                                    <Alert
+                                                        variant={getStatusVariant(source.status)}
+                                                        isInline
+                                                        title={`${source.name} (${source.type})`}
+                                                        style={{marginBottom: '0'}}
+                                                    />
+                                                    <div style={{fontSize: '0.85em', color: '#666', marginTop: '4px'}}>
+                                                        <strong>Status:</strong> {getStatusText(source.status)}
+                                                    </div>
+                                                </div>
+                                                <div style={{textAlign: 'right', fontSize: '0.8em'}}>
+                                                    <div style={{
+                                                        padding: '2px 8px',
+                                                        borderRadius: '12px',
+                                                        backgroundColor: source.reachabilityPercent >= 75 ? '#d4edda' : source.reachabilityPercent >= 50 ? '#fff3cd' : '#f8d7da',
+                                                        color: source.reachabilityPercent >= 75 ? '#155724' : source.reachabilityPercent >= 50 ? '#856404' : '#721c24',
+                                                        fontWeight: 'bold'
+                                                    }}>
+                                                        {source.reachabilityPercent}% Reachable
+                                                    </div>
+                                                    <div style={{marginTop: '4px', color: '#666'}}>
+                                                        Last: {source.lastContact}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                            <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '12px', fontSize: '0.85em'}}>
+                                                <div style={{textAlign: 'center', padding: '6px', backgroundColor: '#f8f9fa', borderRadius: '4px'}}>
+                                                    <div style={{fontWeight: 'bold', color: '#495057'}}>Stratum</div>
+                                                    <div style={{color: '#007bff', fontWeight: 'bold'}}>{source.stratum}</div>
+                                                </div>
+                                                <div style={{textAlign: 'center', padding: '6px', backgroundColor: '#f8f9fa', borderRadius: '4px'}}>
+                                                    <div style={{fontWeight: 'bold', color: '#495057'}}>Poll Interval</div>
+                                                    <div style={{color: '#28a745'}}>{Math.pow(2, parseInt(source.poll || '6'))}s</div>
+                                                </div>
+                                                <div style={{textAlign: 'center', padding: '6px', backgroundColor: '#f8f9fa', borderRadius: '4px'}}>
+                                                    <div style={{fontWeight: 'bold', color: '#495057'}}>Offset</div>
+                                                    <div style={{
+                                                        color: Math.abs(parseFloat(source.offset.replace('ms', '').replace('us', '').replace('ns', ''))) < 100 ? '#28a745' : 
+                                                               Math.abs(parseFloat(source.offset.replace('ms', '').replace('us', '').replace('ns', ''))) < 1000 ? '#ffc107' : '#dc3545',
+                                                        fontWeight: 'bold'
+                                                    }}>{source.offset}</div>
+                                                </div>
+                                                <div style={{textAlign: 'center', padding: '6px', backgroundColor: '#f8f9fa', borderRadius: '4px'}}>
+                                                    <div style={{fontWeight: 'bold', color: '#495057'}}>Reach Register</div>
+                                                    <div style={{fontFamily: 'monospace', fontSize: '0.8em'}}>{source.reach}</div>
+                                                </div>
+                                            </div>
+                                            {source.reachabilityPercent < 50 && (
+                                                <div style={{marginTop: '8px', padding: '6px', backgroundColor: '#f8d7da', borderRadius: '4px', fontSize: '0.8em', color: '#721c24'}}>
+                                                    <strong>Warning:</strong> Low reachability may indicate network issues or source problems
+                                                </div>
+                                            )}
+                                        </div>
                                     </ListItem>
                                 ))}
                             </List>
