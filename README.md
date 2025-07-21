@@ -1,200 +1,142 @@
-# Cockpit Starter Kit
+# Cockpit NTP GPS Plugin
 
-Scaffolding for a [Cockpit](https://cockpit-project.org/) module.
+A Cockpit plugin for GPS-based NTP server configuration and monitoring on pfSense/OPNsense systems.
 
-# Development dependencies
+## Overview
 
-On Debian/Ubuntu:
+This plugin provides a web-based interface for configuring and monitoring GPS-based Network Time Protocol (NTP) servers. It integrates with pfSense/OPNsense firewalls and provides real-time monitoring of GPS status, NTP synchronization, and satellite tracking.
 
-    sudo apt install gettext nodejs npm make
+## Features
 
-On Fedora:
+- **GPS Status Monitoring**: Real-time display of GPS receiver status including satellite count, signal quality, and lock status
+- **NTP Configuration**: Easy configuration of NTP servers with GPS time sources
+- **Satellite Tracking**: Visual display of GPS satellite positions and signal strengths
+- **Time Synchronization**: Monitor NTP synchronization status and accuracy
+- **Web Interface**: Modern React-based user interface built on Cockpit framework
 
-    sudo dnf install gettext nodejs npm make
+## Installation
 
+### Prerequisites
 
-# Getting and building the source
+- pfSense or OPNsense firewall system
+- Cockpit web console installed
+- GPS receiver hardware connected to the system
+- NTP daemon configured
 
-These commands check out the source and build it into the `dist/` directory:
+### Installing the Plugin
 
+1. Clone this repository to your pfSense system:
+```bash
+git clone https://github.com/brunoamui/cockpit-ntp-plugin.git
+cd cockpit-ntp-plugin
 ```
-git clone https://github.com/cockpit-project/starter-kit.git
-cd starter-kit
+
+2. Install dependencies:
+```bash
+npm install
+```
+
+3. Build the plugin:
+```bash
 make
 ```
 
-# Installing
-
-`make install` compiles and installs the package in `/usr/local/share/cockpit/`. The
-convenience targets `srpm` and `rpm` build the source and binary rpms,
-respectively. Both of these make use of the `dist` target, which is used
-to generate the distribution tarball. In `production` mode, source files are
-automatically minified and compressed. Set `NODE_ENV=production` if you want to
-duplicate this behavior.
-
-For development, you usually want to run your module straight out of the git
-tree. To do that, run `make devel-install`, which links your checkout to the
-location were cockpit-bridge looks for packages. If you prefer to do
-this manually:
-
-```
-mkdir -p ~/.local/share/cockpit
-ln -s `pwd`/dist ~/.local/share/cockpit/starter-kit
+4. Install to Cockpit:
+```bash
+sudo make install
 ```
 
-After changing the code and running `make` again, reload the Cockpit page in
-your browser.
-
-You can also use
-[watch mode](https://esbuild.github.io/api/#watch) to
-automatically update the bundle on every code change with
-
-    ./build.js -w
-
-or
-
-    make watch
-
-When developing against a virtual machine, watch mode can also automatically upload
-the code changes by setting the `RSYNC` environment variable to
-the remote hostname.
-
-    RSYNC=c make watch
-
-When developing against a remote host as a normal user, `RSYNC_DEVEL` can be
-set to upload code changes to `~/.local/share/cockpit/` instead of
-`/usr/local`.
-
-    RSYNC_DEVEL=example.com make watch
-
-To "uninstall" the locally installed version, run `make devel-uninstall`, or
-remove manually the symlink:
-
-    rm ~/.local/share/cockpit/starter-kit
-
-# Running eslint
-
-Cockpit Starter Kit uses [ESLint](https://eslint.org/) to automatically check
-JavaScript/TypeScript code style in `.js[x]` and `.ts[x]` files.
-
-eslint is executed as part of `test/static-code`, aka. `make codecheck`.
-
-For developer convenience, the ESLint can be started explicitly by:
-
-    npm run eslint
-
-Violations of some rules can be fixed automatically by:
-
-    npm run eslint:fix
-
-Rules configuration can be found in the `.eslintrc.json` file.
-
-## Running stylelint
-
-Cockpit uses [Stylelint](https://stylelint.io/) to automatically check CSS code
-style in `.css` and `scss` files.
-
-styleint is executed as part of `test/static-code`, aka. `make codecheck`.
-
-For developer convenience, the Stylelint can be started explicitly by:
-
-    npm run stylelint
-
-Violations of some rules can be fixed automatically by:
-
-    npm run stylelint:fix
-
-Rules configuration can be found in the `.stylelintrc.json` file.
-
-# Running tests locally
-
-Run `make check` to build an RPM, install it into a standard Cockpit test VM
-(centos-9-stream by default), and run the test/check-application integration test on
-it. This uses Cockpit's Chrome DevTools Protocol based browser tests, through a
-Python API abstraction. Note that this API is not guaranteed to be stable, so
-if you run into failures and don't want to adjust tests, consider checking out
-Cockpit's test/common from a tag instead of main (see the `test/common`
-target in `Makefile`).
-
-After the test VM is prepared, you can manually run the test without rebuilding
-the VM, possibly with extra options for tracing and halting on test failures
-(for interactive debugging):
-
-    TEST_OS=centos-9-stream test/check-application -tvs
-
-It is possible to setup the test environment without running the tests:
-
-    TEST_OS=centos-9-stream make prepare-check
-
-You can also run the test against a different Cockpit image, for example:
-
-    TEST_OS=fedora-40 make check
-
-# Running tests in CI
-
-These tests can be run in [Cirrus CI](https://cirrus-ci.org/), on their free
-[Linux Containers](https://cirrus-ci.org/guide/linux/) environment which
-explicitly supports `/dev/kvm`. Please see [Quick
-Start](https://cirrus-ci.org/guide/quick-start/) how to set up Cirrus CI for
-your project after forking from starter-kit.
-
-The included [.cirrus.yml](./.cirrus.yml) runs the integration tests for two
-operating systems (Fedora and CentOS 8). Note that if/once your project grows
-bigger, or gets frequent changes, you may need to move to a paid account, or
-different infrastructure with more capacity.
-
-Tests also run in [Packit](https://packit.dev/) for all currently supported
-Fedora releases; see the [packit.yaml](./packit.yaml) control file. You need to
-[enable Packit-as-a-service](https://packit.dev/docs/packit-service/) in your GitHub project to use this.
-To run the tests in the exact same way for upstream pull requests and for
-[Fedora package update gating](https://docs.fedoraproject.org/en-US/ci/), the
-tests are wrapped in the [FMF metadata format](https://github.com/teemtee/fmf)
-for using with the [tmt test management tool](https://docs.fedoraproject.org/en-US/ci/tmt/).
-Note that Packit tests can *not* run their own virtual machine images, thus
-they only run [@nondestructive tests](https://github.com/cockpit-project/cockpit/blob/main/test/common/testlib.py).
-
-# Customizing
-
-After cloning the Starter Kit you should rename the files, package names, and
-labels to your own project's name. Use these commands to find out what to
-change:
-
-    find -iname '*starter*'
-    git grep -i starter
-
-# Automated release
-
-Once your cloned project is ready for a release, you should consider automating
-that. The intention is that the only manual step for releasing a project is to create
-a signed tag for the version number, which includes a summary of the noteworthy
-changes:
-
-```
-123
-
-- this new feature
-- fix bug #123
+5. Restart Cockpit service:
+```bash
+sudo systemctl restart cockpit
 ```
 
-Pushing the release tag triggers the [release.yml](.github/workflows/release.yml.disabled)
-[GitHub action](https://github.com/features/actions) workflow. This creates the
-official release tarball and publishes as upstream release to GitHub. The
-workflow is disabled by default -- to use it, edit the file as per the comment
-at the top, and rename it to just `*.yml`.
+## Development
 
-The Fedora and COPR releases are done with [Packit](https://packit.dev/),
-see the [packit.yaml](./packit.yaml) control file.
+### Setting up Development Environment
 
-# Automated maintenance
+1. Clone the repository:
+```bash
+git clone https://github.com/brunoamui/cockpit-ntp-plugin.git
+cd cockpit-ntp-plugin
+```
 
-It is important to keep your [NPM modules](./package.json) up to date, to keep
-up with security updates and bug fixes. This happens with
-[dependabot](https://github.com/dependabot),
-see [configuration file](.github/dependabot.yml).
+2. Install dependencies:
+```bash
+npm install
+```
 
-# Further reading
+3. Start development server:
+```bash
+make watch
+```
 
- * The [Starter Kit announcement](https://cockpit-project.org/blog/cockpit-starter-kit.html)
-   blog post explains the rationale for this project.
- * [Cockpit Deployment and Developer documentation](https://cockpit-project.org/guide/latest/)
- * [Make your project easily discoverable](https://cockpit-project.org/blog/making-a-cockpit-application.html)
+The development server will automatically reload when you make changes.
+
+### Building for Production
+
+```bash
+make
+```
+
+This creates an optimized build in the `dist/` directory.
+
+### Running Tests
+
+```bash
+make check
+```
+
+## Configuration
+
+The plugin reads GPS and NTP status from standard system interfaces:
+
+- GPS data from `/dev/gps0` or similar GPS device
+- NTP status from `ntpq` command output
+- System time information from standard Linux time APIs
+
+### GPS Hardware Support
+
+The plugin supports various GPS receivers including:
+- u-blox GPS modules
+- Generic NMEA 0183 compatible devices
+- PPS (Pulse Per Second) capable receivers
+
+## API Documentation
+
+The plugin exposes several REST endpoints for GPS and NTP data:
+
+- `GET /api/gps/status` - Current GPS receiver status
+- `GET /api/gps/satellites` - Satellite information and positions
+- `GET /api/ntp/status` - NTP synchronization status
+- `GET /api/ntp/peers` - NTP peer information
+
+## Contributing
+
+Contributions are welcome! Please feel free to submit a Pull Request.
+
+### Development Guidelines
+
+- Follow React and TypeScript best practices
+- Write tests for new features
+- Update documentation for API changes
+- Use semantic commit messages
+
+## License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+
+## Support
+
+- **Issues**: Report bugs or request features on [GitHub Issues](https://github.com/brunoamui/cockpit-ntp-plugin/issues)
+- **Documentation**: Visit our repository for detailed documentation
+
+## Acknowledgments
+
+- Built on the [Cockpit Project](https://cockpit-project.org/) framework
+- Uses GPS data parsing libraries from the open source community
+- Inspired by the need for precise time synchronization in network infrastructure
+
+---
+
+**Note**: This plugin is designed for use with pfSense/OPNsense systems but can be adapted for other Linux-based firewall distributions.
