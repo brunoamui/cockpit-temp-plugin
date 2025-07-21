@@ -5,7 +5,7 @@
 
     "tools": {
         "index": {
-            "label": "GPS NTP Server",
+            "label": "ADS-B Monitor",
             "path": "index.html"
         }
     }
