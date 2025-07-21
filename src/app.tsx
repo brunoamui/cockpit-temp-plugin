@@ -24,8 +24,15 @@ interface NTPSource {
 
 interface NTPClient {
     hostname: string;
-    requests: string;
-    last: string;
+    ntpRequests: string;
+    ntpDrop: string;
+    ntpInterval: string;
+    ntpIntervalLast: string;
+    ntpLast: string;
+    cmdRequests: string;
+    cmdDrop: string;
+    cmdInterval: string;
+    cmdLast: string;
 }
 
 interface GPSInfo {
@@ -172,12 +179,19 @@ export const Application = () => {
                 
                 for (const line of lines) {
                     if (line && !line.startsWith('Hostname') && !line.startsWith('=')) {
-                        const parts = line.split(/\s+/);
-                        if (parts.length >= 3) {
+                        const parts = line.split(/\s+/).filter(part => part !== '');
+                        if (parts.length >= 10) {
                             clientData.push({
                                 hostname: parts[0] || 'Unknown',
-                                requests: parts[1] || '0',
-                                last: parts[4] || 'Never'
+                                ntpRequests: parts[1] || '0',
+                                ntpDrop: parts[2] || '0',
+                                ntpInterval: parts[3] || '-',
+                                ntpIntervalLast: parts[4] || '-',
+                                ntpLast: parts[5] || '-',
+                                cmdRequests: parts[6] || '0',
+                                cmdDrop: parts[7] || '0',
+                                cmdInterval: parts[8] || '-',
+                                cmdLast: parts[9] || '-'
                             });
                         }
                     }
@@ -328,7 +342,23 @@ export const Application = () => {
                             <List>
                                 {clients.map((client, index) => (
                                     <ListItem key={index}>
-                                        <strong>{client.hostname}</strong> - {client.requests} requests (Last: {client.last})
+                                        <div style={{fontSize: '0.9em'}}>
+                                            <div style={{fontWeight: 'bold', marginBottom: '4px'}}>
+                                                {client.hostname}
+                                            </div>
+                                            <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', fontSize: '0.85em', color: '#666'}}>
+                                                <div>
+                                                    <strong>NTP:</strong> {client.ntpRequests} req, {client.ntpDrop} drop<br/>
+                                                    <strong>Interval:</strong> {client.ntpInterval} ({client.ntpIntervalLast})<br/>
+                                                    <strong>Last NTP:</strong> {client.ntpLast === '-' ? 'Never' : client.ntpLast + 's ago'}
+                                                </div>
+                                                <div>
+                                                    <strong>CMD:</strong> {client.cmdRequests} req, {client.cmdDrop} drop<br/>
+                                                    <strong>CMD Int:</strong> {client.cmdInterval}<br/>
+                                                    <strong>Last CMD:</strong> {client.cmdLast === '-' ? 'Never' : client.cmdLast + 's ago'}
+                                                </div>
+                                            </div>
+                                        </div>
                                     </ListItem>
                                 ))}
                             </List>
