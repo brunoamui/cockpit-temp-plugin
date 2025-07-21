@@ -35,6 +35,16 @@ interface GPSInfo {
     longitude: string;
     altitude: string;
     mode: string;
+    hdop: string;
+    pdop: string;
+    vdop: string;
+    speed: string;
+    climb: string;
+    time: string;
+    ept: string;
+    satellitesVisible: number;
+    satellitesUsed: number;
+    bestSatellite: { prn: string, ss: number } | null;
 }
 
 export const Application = () => {
@@ -42,7 +52,24 @@ export const Application = () => {
     const [sources, setSources] = useState<NTPSource[]>([]);
     const [clients, setClients] = useState<NTPClient[]>([]);
     const [gpsStatus, setGpsStatus] = useState('Unknown');
-    const [gpsInfo, setGpsInfo] = useState<GPSInfo>({ status: 'Unknown', satellites: '0', latitude: 'N/A', longitude: 'N/A', altitude: 'N/A', mode: 'N/A' });
+    const [gpsInfo, setGpsInfo] = useState<GPSInfo>({ 
+        status: 'Unknown', 
+        satellites: '0', 
+        latitude: 'N/A', 
+        longitude: 'N/A', 
+        altitude: 'N/A', 
+        mode: 'N/A',
+        hdop: 'N/A',
+        pdop: 'N/A', 
+        vdop: 'N/A',
+        speed: 'N/A',
+        climb: 'N/A',
+        time: 'N/A',
+        ept: 'N/A',
+        satellitesVisible: 0,
+        satellitesUsed: 0,
+        bestSatellite: null
+    });
     const [loading, setLoading] = useState(false);
 
     const fetchNTPStatus = async () => {
@@ -99,14 +126,29 @@ export const Application = () => {
                             }
                             
                             if (tpvData) {
-                                const satCount = skyData ? skyData.satellites.filter(sat => sat.used).length : '0';
+                                const satUsed = skyData ? skyData.satellites.filter(sat => sat.used).length : 0;
+                                const satVisible = skyData ? skyData.nSat : 0;
+                                const bestSat = skyData ? 
+                                    skyData.satellites.reduce((best, sat) => 
+                                        sat.ss > (best?.ss || 0) ? sat : best, null) : null;
+                                
                                 setGpsInfo({
                                     status: tpvData.mode >= 2 ? 'Fix acquired' : 'No fix',
-                                    satellites: satCount.toString(),
+                                    satellites: satUsed.toString(),
                                     latitude: tpvData.lat.toFixed(6),
                                     longitude: tpvData.lon.toFixed(6),
                                     altitude: tpvData.alt ? tpvData.alt.toFixed(1) + 'm' : 'N/A',
-                                    mode: tpvData.mode === 3 ? '3D Fix' : tpvData.mode === 2 ? '2D Fix' : 'No Fix'
+                                    mode: tpvData.mode === 3 ? '3D Fix' : tpvData.mode === 2 ? '2D Fix' : 'No Fix',
+                                    hdop: skyData?.hdop ? skyData.hdop.toFixed(2) : 'N/A',
+                                    pdop: skyData?.pdop ? skyData.pdop.toFixed(2) : 'N/A',
+                                    vdop: skyData?.vdop ? skyData.vdop.toFixed(2) : 'N/A',
+                                    speed: tpvData.speed ? (tpvData.speed * 3.6).toFixed(1) + ' km/h' : '0.0 km/h',
+                                    climb: tpvData.climb ? tpvData.climb.toFixed(1) + ' m/s' : '0.0 m/s',
+                                    time: tpvData.time ? new Date(tpvData.time).toLocaleTimeString() : 'N/A',
+                                    ept: tpvData.ept ? (tpvData.ept * 1000).toFixed(1) + ' ms' : 'N/A',
+                                    satellitesVisible: satVisible,
+                                    satellitesUsed: satUsed,
+                                    bestSatellite: bestSat ? { prn: bestSat.PRN.toString(), ss: bestSat.ss } : null
                                 });
                             }
                         } catch (e) {
@@ -217,14 +259,61 @@ export const Application = () => {
                     <CardBody>
                         <Alert
                             variant={gpsInfo.status.includes('Fix') ? 'success' : gpsInfo.status === 'Active' ? 'warning' : 'danger'}
-                            title={`GPS Signal: ${gpsInfo.status}`}
+                            title={`GPS Signal: ${gpsInfo.status} (${gpsInfo.mode})`}
                         />
                         {gpsInfo.latitude !== 'N/A' && (
-                            <div style={{marginTop: '10px'}}>
-                                <strong>Position:</strong> {gpsInfo.latitude}, {gpsInfo.longitude}<br/>
-                                <strong>Altitude:</strong> {gpsInfo.altitude}<br/>
-                                <strong>Mode:</strong> {gpsInfo.mode}<br/>
-                                <strong>Satellites:</strong> {gpsInfo.satellites}
+                            <div style={{marginTop: '10px', fontSize: '0.9em'}}>
+                                <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '10px'}}>
+                                    <div>
+                                        <strong>Position:</strong><br/>
+                                        Lat: {gpsInfo.latitude}<br/>
+                                        Lon: {gpsInfo.longitude}<br/>
+                                        <strong>Altitude:</strong> {gpsInfo.altitude}
+                                    </div>
+                                    <div>
+                                        <strong>Motion:</strong><br/>
+                                        Speed: {gpsInfo.speed}<br/>
+                                        Climb: {gpsInfo.climb}<br/>
+                                        <strong>GPS Time:</strong> {gpsInfo.time}
+                                    </div>
+                                </div>
+                                <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '10px', marginBottom: '10px'}}>
+                                    <div>
+                                        <strong>Satellites:</strong><br/>
+                                        Used: {gpsInfo.satellites}/{gpsInfo.satellitesVisible}<br/>
+                                        {gpsInfo.bestSatellite && (
+                                            <span>Best: PRN {gpsInfo.bestSatellite.prn} ({gpsInfo.bestSatellite.ss} dB)</span>
+                                        )}
+                                    </div>
+                                    <div>
+                                        <strong>Precision (DOP):</strong><br/>
+                                        HDOP: {gpsInfo.hdop}<br/>
+                                        PDOP: {gpsInfo.pdop}<br/>
+                                        VDOP: {gpsInfo.vdop}
+                                    </div>
+                                    <div>
+                                        <strong>Time Accuracy:</strong><br/>
+                                        EPT: {gpsInfo.ept}<br/>
+                                        <div style={{
+                                            marginTop: '5px',
+                                            padding: '2px 6px',
+                                            borderRadius: '3px',
+                                            backgroundColor: 
+                                                gpsInfo.hdop !== 'N/A' && parseFloat(gpsInfo.hdop) < 2 ? '#d4edda' :
+                                                gpsInfo.hdop !== 'N/A' && parseFloat(gpsInfo.hdop) < 5 ? '#fff3cd' : '#f8d7da',
+                                            color: 
+                                                gpsInfo.hdop !== 'N/A' && parseFloat(gpsInfo.hdop) < 2 ? '#155724' :
+                                                gpsInfo.hdop !== 'N/A' && parseFloat(gpsInfo.hdop) < 5 ? '#856404' : '#721c24',
+                                            fontSize: '0.8em',
+                                            textAlign: 'center'
+                                        }}>
+                                            {
+                                                gpsInfo.hdop !== 'N/A' && parseFloat(gpsInfo.hdop) < 2 ? 'Excellent' :
+                                                gpsInfo.hdop !== 'N/A' && parseFloat(gpsInfo.hdop) < 5 ? 'Good' : 'Poor'
+                                            } precision
+                                        </div>
+                                    </div>
+                                </div>
                             </div>
                         )}
                     </CardBody>
