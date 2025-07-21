@@ -1,31 +1,32 @@
-# Cockpit NTP GPS Plugin
+# Cockpit GPS NTP Monitor
 
-A Cockpit plugin for GPS-based NTP server configuration and monitoring on pfSense/OPNsense systems.
+A Cockpit web interface plugin for monitoring GPS-based NTP server status and accuracy on Linux systems.
 
 ## Overview
 
-This plugin provides a web-based interface for configuring and monitoring GPS-based Network Time Protocol (NTP) servers. It integrates with pfSense/OPNsense firewalls and provides real-time monitoring of GPS status, NTP synchronization, and satellite tracking.
+This plugin provides a web-based interface for monitoring GPS-based Network Time Protocol (NTP) servers running on Linux systems. It integrates with the Cockpit web console and provides real-time monitoring of GPS receiver status, NTP synchronization accuracy, and client connections.
 
 ## Features
 
-- **GPS Status Monitoring**: Real-time display of GPS receiver status including satellite count, signal quality, and lock status
-- **NTP Configuration**: Easy configuration of NTP servers with GPS time sources
-- **Satellite Tracking**: Visual display of GPS satellite positions and signal strengths
-- **Time Synchronization**: Monitor NTP synchronization status and accuracy
+- **GPS Status Monitoring**: Real-time display of GPS receiver status including satellite count, signal quality, and position fix
+- **PPS Accuracy Monitoring**: Monitor Pulse Per Second timing accuracy and jitter
+- **NTP Client Tracking**: View active NTP clients and their connection statistics
+- **Chrony Integration**: Full integration with Chrony NTP daemon for precise time sources
 - **Web Interface**: Modern React-based user interface built on Cockpit framework
 
 ## Installation
 
 ### Prerequisites
 
-- pfSense or OPNsense firewall system
+- Linux system (Fedora, RHEL, CentOS, Ubuntu, etc.)
 - Cockpit web console installed
 - GPS receiver hardware connected to the system
-- NTP daemon configured
+- Chrony NTP daemon configured
+- GPSD daemon for GPS communication
 
 ### Installing the Plugin
 
-1. Clone this repository to your pfSense system:
+1. Clone this repository to your Linux system:
 ```bash
 git clone https://github.com/brunoamui/cockpit-ntp-plugin.git
 cd cockpit-ntp-plugin
@@ -87,29 +88,32 @@ This creates an optimized build in the `dist/` directory.
 make check
 ```
 
-## Configuration
+## How It Works
 
-The plugin reads GPS and NTP status from standard system interfaces:
+The plugin reads GPS and NTP status from standard Linux system commands:
 
-- GPS data from `/dev/gps0` or similar GPS device
-- NTP status from `ntpq` command output
-- System time information from standard Linux time APIs
+- **GPS data**: Retrieved via `gpspipe` command from GPSD daemon
+- **NTP status**: Monitored using `chronyc` commands (sources, clients, tracking, sourcestats)
+- **PPS timing**: Analyzed through Chrony's tracking and source statistics
+- **System time**: Obtained from standard Linux time APIs
 
-### GPS Hardware Support
+### Supported GPS Hardware
 
-The plugin supports various GPS receivers including:
+The plugin works with any GPS receiver supported by GPSD, including:
 - u-blox GPS modules
 - Generic NMEA 0183 compatible devices
 - PPS (Pulse Per Second) capable receivers
+- USB GPS dongles
+- Serial GPS receivers
 
-## API Documentation
+## What You'll See
 
-The plugin exposes several REST endpoints for GPS and NTP data:
+The web interface displays:
 
-- `GET /api/gps/status` - Current GPS receiver status
-- `GET /api/gps/satellites` - Satellite information and positions
-- `GET /api/ntp/status` - NTP synchronization status
-- `GET /api/ntp/peers` - NTP peer information
+- **GPS Status**: Current fix status, position, altitude, speed, and satellite information
+- **PPS Accuracy**: Timing precision metrics including offset, jitter, and frequency drift
+- **NTP Clients**: List of systems requesting time synchronization
+- **Time Sources**: Status of all configured time sources and their reliability
 
 ## Contributing
 
@@ -139,4 +143,4 @@ This project is licensed under the MIT License - see the [LICENSE](LICENSE) file
 
 ---
 
-**Note**: This plugin is designed for use with pfSense/OPNsense systems but can be adapted for other Linux-based firewall distributions.
+**Note**: This plugin is designed for general Linux systems running Cockpit, Chrony, and GPSD. It can be used on servers, workstations, or any Linux-based system that needs precise GPS time synchronization.
