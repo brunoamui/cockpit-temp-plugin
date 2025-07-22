@@ -1,6 +1,6 @@
 /*
- * ADS-B Monitor - Cockpit Plugin
- * Monitor ADS-B receiver statistics and embedded tar1090 map
+ * Temperature Monitor - Cockpit Plugin
+ * Monitor CPU/system temperature with graphing and automatic logging setup
  */
 
 import React, { useEffect, useState } from 'react';
@@ -9,134 +9,337 @@ import { Card, CardBody, CardTitle } from "@patternfly/react-core/dist/esm/compo
 import { Grid, GridItem } from "@patternfly/react-core/dist/esm/layouts/Grid/index.js";
 import { Button } from "@patternfly/react-core/dist/esm/components/Button/index.js";
 import { Tabs, Tab, TabTitleText } from "@patternfly/react-core/dist/esm/components/Tabs/index.js";
+import {
+  Chart as ChartJS,
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
+  Tooltip,
+  Legend,
+  TimeScale,
+} from 'chart.js';
+import { Line } from 'react-chartjs-2';
+import 'chartjs-adapter-date-fns';
 
 import cockpit from 'cockpit';
 
 const _ = cockpit.gettext;
 
-interface ADSBStats {
-    now: number;
-    gain_db: number;
-    estimated_ppm: number;
-    aircraft_with_pos: number;
-    aircraft_without_pos: number;
-    aircraft_count_by_type: {[key: string]: number};
-    last1min: PeriodStats;
-    last5min: PeriodStats;
-    last15min: PeriodStats;
-    total: PeriodStats;
+// Register Chart.js components
+ChartJS.register(
+  CategoryScale,
+  LinearScale,
+  PointElement,
+  LineElement,
+  Title,
+  Tooltip,
+  Legend,
+  TimeScale
+);
+
+interface TempReading {
+    timestamp: string;
+    sensorsTemp: number | null;
+    thermalTemp: number;
 }
 
-interface PeriodStats {
-    start: number;
-    end: number;
-    messages: number;
-    messages_valid: number;
-    position_count_total: number;
-    max_distance: number;
-    local: {
-        samples_processed: number;
-        samples_dropped: number;
-        samples_lost: number;
-        modes: number;
-        bad: number;
-        unknown_icao: number;
-        accepted: number[];
-        signal: number;
-        noise: number;
-        peak_signal: number;
-        strong_signals: number;
-    };
-    tracks: {
-        all: number;
-        single_message: number;
-    };
-    cpu: {
-        demod: number;
-        reader: number;
-        background: number;
-    };
+interface LoggingStatus {
+    isInstalled: boolean;
+    isRunning: boolean;
+    logExists: boolean;
+    lastReading?: TempReading;
+    recentReadings: TempReading[];
+    currentTemp?: number;
 }
 
-interface ReceiverInfo {
-    status: string;
-    uptime: string;
-    version: string;
-    sampleRate: string;
-    gain: string;
-    ppm: string;
+interface CurrentTemperature {
+    sensors: number | null;
+    thermal: number;
 }
 
 export const Application = () => {
     const [hostname, setHostname] = useState('');
-    const [stats, setStats] = useState<ADSBStats | null>(null);
-    const [receiverInfo, setReceiverInfo] = useState<ReceiverInfo>({
-        status: 'Unknown',
-        uptime: 'N/A',
-        version: 'N/A',
-        sampleRate: 'N/A',
-        gain: 'N/A',
-        ppm: 'N/A'
+    const [loggingStatus, setLoggingStatus] = useState<LoggingStatus>({
+        isInstalled: false,
+        isRunning: false,
+        logExists: false,
+        recentReadings: []
     });
+    const [currentTemp, setCurrentTemp] = useState<CurrentTemperature>({ sensors: null, thermal: 0 });
     const [loading, setLoading] = useState(false);
     const [activeTab, setActiveTab] = useState<string | number>(0);
+    const [timeRange, setTimeRange] = useState<string>('1h');
 
-    const fetchADSBStats = async () => {
+    // Temperature status colors
+    const getTempColor = (temp: number): string => {
+        if (temp >= 80) return '#dc3545'; // Critical - red
+        if (temp >= 70) return '#fd7e14'; // Hot - orange
+        if (temp >= 60) return '#ffc107'; // Warm - yellow
+        return '#28a745'; // Normal - green
+    };
+
+    const getTempStatus = (temp: number): string => {
+        if (temp >= 80) return 'Critical';
+        if (temp >= 70) return 'Hot';
+        if (temp >= 60) return 'Warm';
+        return 'Normal';
+    };
+
+    const fetchCurrentTemperature = async () => {
         try {
-            setLoading(true);
-
-            // Fetch tar1090 stats
-            const statsProc = cockpit.spawn(['curl', '-s', 'http://localhost/tar1090/data/stats.json'], { superuser: 'try' });
-            statsProc.done((data) => {
-                try {
-                    const parsedStats = JSON.parse(data);
-                    setStats(parsedStats);
-                } catch (e) {
-                    console.error('Error parsing stats JSON:', e);
-                }
-            });
-
-            // Check readsb service status
-            const statusProc = cockpit.spawn(['systemctl', 'status', 'readsb', '--no-pager', '-l'], { superuser: 'try' });
-            statusProc.done((data) => {
-                const lines = data.split('\n');
-                let isActive = false;
-                let startTime = '';
-                
-                for (const line of lines) {
-                    if (line.includes('Active:')) {
-                        isActive = line.includes('active (running)');
-                        const match = line.match(/since\s+(.+?);/);
-                        if (match) {
-                            startTime = match[1];
-                        }
+            // Get current sensor temperature
+            const sensorsProc = cockpit.spawn(['sensors'], { superuser: 'try' });
+            sensorsProc.done((data) => {
+                let sensorsTemp = null;
+                const tempLine = data.split('\n').find(line => line.includes('temp1:'));
+                if (tempLine) {
+                    const match = tempLine.match(/\+([0-9.]+)°C/);
+                    if (match) {
+                        sensorsTemp = parseFloat(match[1]);
                     }
                 }
-                
-                setReceiverInfo(prev => ({
-                    ...prev,
-                    status: isActive ? 'Active' : 'Inactive',
-                    uptime: startTime || 'N/A'
-                }));
-            }).fail(() => {
-                setReceiverInfo(prev => ({ ...prev, status: 'Service check failed' }));
+
+                // Get thermal zone temperature
+                const thermalProc = cockpit.spawn(['cat', '/sys/class/thermal/thermal_zone0/temp'], { superuser: 'try' });
+                thermalProc.done((thermalData) => {
+                    const rawTemp = parseInt(thermalData.trim());
+                    const thermalTemp = rawTemp / 1000;
+                    
+                    setCurrentTemp({
+                        sensors: sensorsTemp,
+                        thermal: thermalTemp
+                    });
+                });
             });
 
-            setLoading(false);
         } catch (error) {
-            console.error('Error fetching ADS-B stats:', error);
+            console.error('Error fetching current temperature:', error);
+        }
+    };
+
+    const checkLoggingStatus = async () => {
+        try {
+            setLoading(true);
+            
+            // Check if logging script exists
+            const scriptCheckProc = cockpit.spawn(['test', '-f', '/usr/local/bin/temp_logger.sh'], { superuser: 'try' });
+            scriptCheckProc.done(() => {
+                // Check if cron job exists
+                const cronCheckProc = cockpit.spawn(['grep', 'temp_logger.sh', '/etc/crontab'], { superuser: 'try' });
+                cronCheckProc.done(() => {
+                    // Both script and cron exist
+                    // Check if log file exists and get recent data
+                    const logCheckProc = cockpit.spawn(['test', '-f', '/var/log/temperature/temperature.log'], { superuser: 'try' });
+                    logCheckProc.done(() => {
+                        // Get recent readings
+                        const readLogProc = cockpit.spawn(['tail', '-100', '/var/log/temperature/temperature.log'], { superuser: 'try' });
+                        readLogProc.done((data) => {
+                            const lines = data.split('\n').filter(line => line && !line.startsWith('#'));
+                            const recentReadings: TempReading[] = lines.map(line => {
+                                const parts = line.split(',');
+                                if (parts.length === 3) {
+                                    return {
+                                        timestamp: parts[0],
+                                        sensorsTemp: parts[1] ? parseFloat(parts[1]) : null,
+                                        thermalTemp: parseFloat(parts[2])
+                                    };
+                                }
+                                return null;
+                            }).filter(reading => reading !== null) as TempReading[];
+                            
+                            setLoggingStatus({
+                                isInstalled: true,
+                                isRunning: true,
+                                logExists: true,
+                                lastReading: recentReadings[recentReadings.length - 1],
+                                recentReadings: recentReadings
+                            });
+                            setLoading(false);
+                        });
+                    }).fail(() => {
+                        setLoggingStatus({
+                            isInstalled: true,
+                            isRunning: true,
+                            logExists: false,
+                            recentReadings: []
+                        });
+                        setLoading(false);
+                    });
+                }).fail(() => {
+                    setLoggingStatus({
+                        isInstalled: false,
+                        isRunning: false,
+                        logExists: false,
+                        recentReadings: []
+                    });
+                    setLoading(false);
+                });
+            }).fail(() => {
+                setLoggingStatus({
+                    isInstalled: false,
+                    isRunning: false,
+                    logExists: false,
+                    recentReadings: []
+                });
+                setLoading(false);
+            });
+
+        } catch (error) {
+            console.error('Error checking logging status:', error);
             setLoading(false);
         }
+    };
+
+    const installLogging = async () => {
+        try {
+            setLoading(true);
+            
+            // Create log directory
+            await cockpit.spawn(['mkdir', '-p', '/var/log/temperature'], { superuser: 'require' });
+            
+            // Create logging script
+            const scriptContent = `#!/bin/bash
+
+LOG_FILE="/var/log/temperature/temperature.log"
+TIMESTAMP=$(date '+%Y-%m-%d %H:%M:%S')
+
+# Get CPU temperature from sensors (extract numeric value)
+CPU_TEMP=$(sensors | grep 'temp1:' | awk '{print $2}' | sed 's/[+°C]//g')
+
+# Get raw temperature from thermal zone (in millicelsius)
+RAW_TEMP=$(cat /sys/class/thermal/thermal_zone0/temp)
+THERMAL_TEMP=$(echo "scale=1; $RAW_TEMP / 1000" | bc)
+
+# Log both readings (CSV format: timestamp,sensors_temp,thermal_temp)
+echo "$TIMESTAMP,$CPU_TEMP,$THERMAL_TEMP" >> $LOG_FILE
+
+# Optional: Keep only last 30 days of logs
+find /var/log/temperature -name "*.log" -mtime +30 -delete 2>/dev/null
+`;
+            
+            await cockpit.file('/tmp/temp_logger.sh', { superuser: 'require' }).replace(scriptContent);
+            await cockpit.spawn(['mv', '/tmp/temp_logger.sh', '/usr/local/bin/'], { superuser: 'require' });
+            await cockpit.spawn(['chmod', '+x', '/usr/local/bin/temp_logger.sh'], { superuser: 'require' });
+            
+            // Add cron job
+            await cockpit.spawn(['sh', '-c', 'echo "* * * * * root /usr/local/bin/temp_logger.sh" >> /etc/crontab'], { superuser: 'require' });
+            
+            // Create log file with header
+            await cockpit.spawn(['sh', '-c', 'echo "# Timestamp,Sensors_Temp(C),Thermal_Temp(C)" > /var/log/temperature/temperature.log'], { superuser: 'require' });
+            await cockpit.spawn(['chmod', '644', '/var/log/temperature/temperature.log'], { superuser: 'require' });
+            
+            // Run once immediately
+            await cockpit.spawn(['/usr/local/bin/temp_logger.sh'], { superuser: 'require' });
+            
+            // Refresh status
+            await checkLoggingStatus();
+            
+        } catch (error) {
+            console.error('Error installing logging:', error);
+            setLoading(false);
+        }
+    };
+
+    const getChartData = () => {
+        const filteredReadings = filterReadingsByTimeRange(loggingStatus.recentReadings);
+        
+        return {
+            labels: filteredReadings.map(reading => new Date(reading.timestamp)),
+            datasets: [
+                {
+                    label: 'Thermal Zone Temperature',
+                    data: filteredReadings.map(reading => reading.thermalTemp),
+                    borderColor: 'rgb(255, 99, 132)',
+                    backgroundColor: 'rgba(255, 99, 132, 0.2)',
+                    tension: 0.1,
+                },
+                {
+                    label: 'Sensors Temperature',
+                    data: filteredReadings.map(reading => reading.sensorsTemp || null),
+                    borderColor: 'rgb(54, 162, 235)',
+                    backgroundColor: 'rgba(54, 162, 235, 0.2)',
+                    tension: 0.1,
+                    spanGaps: true,
+                },
+            ],
+        };
+    };
+
+    const chartOptions = {
+        responsive: true,
+        maintainAspectRatio: false,
+        plugins: {
+            legend: {
+                position: 'top' as const,
+            },
+            title: {
+                display: true,
+                text: 'Temperature History',
+            },
+        },
+        scales: {
+            x: {
+                type: 'time' as const,
+                time: {
+                    displayFormats: {
+                        minute: 'HH:mm',
+                        hour: 'HH:mm',
+                        day: 'MM/dd',
+                    },
+                },
+            },
+            y: {
+                beginAtZero: false,
+                title: {
+                    display: true,
+                    text: 'Temperature (°C)',
+                },
+            },
+        },
+    };
+
+    const filterReadingsByTimeRange = (readings: TempReading[]): TempReading[] => {
+        if (timeRange === 'all') return readings;
+        
+        const now = new Date();
+        let cutoffTime = new Date();
+        
+        switch (timeRange) {
+            case '1h':
+                cutoffTime = new Date(now.getTime() - 60 * 60 * 1000);
+                break;
+            case '6h':
+                cutoffTime = new Date(now.getTime() - 6 * 60 * 60 * 1000);
+                break;
+            case '24h':
+                cutoffTime = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+                break;
+            case '7d':
+                cutoffTime = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+                break;
+            default:
+                return readings;
+        }
+        
+        return readings.filter(reading => new Date(reading.timestamp) >= cutoffTime);
     };
 
     useEffect(() => {
         const hostname = cockpit.file('/etc/hostname');
         hostname.watch(content => setHostname(content?.trim() ?? ""));
         
-        fetchADSBStats();
+        fetchCurrentTemperature();
+        checkLoggingStatus();
         
-        // Refresh every 10 seconds
-        const interval = setInterval(fetchADSBStats, 10000);
+        // Refresh every 30 seconds
+        const interval = setInterval(() => {
+            fetchCurrentTemperature();
+            if (loggingStatus.isInstalled) {
+                checkLoggingStatus();
+            }
+        }, 30000);
         
         return () => {
             hostname.close();
@@ -144,29 +347,7 @@ export const Application = () => {
         };
     }, []);
 
-    const formatNumber = (num: number): string => {
-        if (num >= 1000000) {
-            return (num / 1000000).toFixed(1) + 'M';
-        } else if (num >= 1000) {
-            return (num / 1000).toFixed(1) + 'K';
-        }
-        return num.toString();
-    };
-
-    const formatDistance = (meters: number): string => {
-        if (meters >= 1000) {
-            return (meters / 1000).toFixed(1) + ' km';
-        }
-        return meters + ' m';
-    };
-
-    const getSignalQuality = (signal: number, noise: number): { level: string, color: string } => {
-        const snr = signal - noise;
-        if (snr > 20) return { level: 'Excellent', color: '#28a745' };
-        if (snr > 15) return { level: 'Good', color: '#28a745' };
-        if (snr > 10) return { level: 'Fair', color: '#ffc107' };
-        return { level: 'Poor', color: '#dc3545' };
-    };
+    const currentTempValue = currentTemp.sensors || currentTemp.thermal;
 
     return (
         <div style={{height: '100vh', overflowY: 'scroll', padding: '20px'}}>
@@ -174,7 +355,7 @@ export const Application = () => {
             <GridItem span={12}>
                 <Alert
                     variant="info"
-                    title={cockpit.format(_("ADS-B Monitor - $0"), hostname)}
+                    title={cockpit.format(_("Temperature Monitor - $0"), hostname)}
                 />
             </GridItem>
             
@@ -182,47 +363,40 @@ export const Application = () => {
                 <Card>
                     <CardBody style={{padding: '0'}}>
                         <Tabs activeKey={activeTab} onSelect={(event, tabIndex) => setActiveTab(tabIndex)}>
-                            <Tab eventKey={0} title={<TabTitleText>Live Map</TabTitleText>}>
-                                <div style={{padding: '20px', textAlign: 'center'}}>
-                                    <Card>
-                                        <CardTitle>tar1090 Live Aircraft Map</CardTitle>
-                                        <CardBody style={{textAlign: 'center', padding: '40px'}}>
-                                            <div style={{marginBottom: '20px', color: '#666'}}>
-                                                <p>Click the button below to open the live aircraft tracking map.</p>
-                                                <p style={{fontSize: '0.9em'}}>The map will open in a new tab/window and show real-time aircraft positions, tracks, and details.</p>
-                                            </div>
-                                            <Button 
-                                                variant="primary" 
-                                                size="lg"
-                                                onClick={() => window.open('http://radiogps/tar1090/', '_blank')}
-                                                style={{padding: '12px 24px', fontSize: '16px'}}
-                                            >
-                                                🛩️ Open Live Map
-                                            </Button>
-                                            <div style={{marginTop: '20px', fontSize: '0.85em', color: '#888'}}>
-                                                <p>Map features:</p>
-                                                <ul style={{listStyle: 'none', padding: 0}}>
-                                                    <li>• Real-time aircraft positions</li>
-                                                    <li>• Flight tracks and history</li>
-                                                    <li>• Aircraft details and flight info</li>
-                                                    <li>• Range and coverage visualization</li>
-                                                </ul>
-                                            </div>
-                                        </CardBody>
-                                    </Card>
-                                </div>
-                            </Tab>
-                            <Tab eventKey={1} title={<TabTitleText>Statistics</TabTitleText>}>
+                            <Tab eventKey={0} title={<TabTitleText>Current Status</TabTitleText>}>
                                 <div style={{padding: '20px'}}>
                                     <Grid hasGutter>
-                                        {/* Receiver Status */}
+                                        {/* Current Temperature */}
+                                        <GridItem span={6}>
+                                            <Card>
+                                                <CardTitle>Current Temperature</CardTitle>
+                                                <CardBody style={{textAlign: 'center'}}>
+                                                    <div style={{fontSize: '3em', fontWeight: 'bold', color: getTempColor(currentTempValue)}}>
+                                                        {currentTempValue.toFixed(1)}°C
+                                                    </div>
+                                                    <div style={{fontSize: '1.2em', margin: '10px 0'}}>
+                                                        Status: <span style={{color: getTempColor(currentTempValue), fontWeight: 'bold'}}>
+                                                            {getTempStatus(currentTempValue)}
+                                                        </span>
+                                                    </div>
+                                                    {currentTemp.sensors && (
+                                                        <div style={{fontSize: '0.9em', color: '#666'}}>
+                                                            Sensors: {currentTemp.sensors.toFixed(1)}°C | 
+                                                            Thermal: {currentTemp.thermal.toFixed(1)}°C
+                                                        </div>
+                                                    )}
+                                                </CardBody>
+                                            </Card>
+                                        </GridItem>
+
+                                        {/* Logging Status */}
                                         <GridItem span={6}>
                                             <Card>
                                                 <CardTitle>
-                                                    Receiver Status
+                                                    Temperature Logging
                                                     <Button 
                                                         variant="link" 
-                                                        onClick={fetchADSBStats} 
+                                                        onClick={checkLoggingStatus} 
                                                         isDisabled={loading}
                                                         style={{float: 'right'}}
                                                     >
@@ -231,150 +405,81 @@ export const Application = () => {
                                                 </CardTitle>
                                                 <CardBody>
                                                     <Alert
-                                                        variant={receiverInfo.status === 'Active' ? 'success' : 'danger'}
-                                                        title={`Readsb Service: ${receiverInfo.status}`}
+                                                        variant={loggingStatus.isInstalled ? 'success' : 'warning'}
+                                                        title={`Logging: ${loggingStatus.isInstalled ? 'Active' : 'Not Installed'}`}
                                                     />
-                                                    {stats && (
+                                                    
+                                                    {!loggingStatus.isInstalled && (
+                                                        <div style={{marginTop: '15px', textAlign: 'center'}}>
+                                                            <p>Temperature logging is not set up. Click below to install automatic temperature logging.</p>
+                                                            <Button 
+                                                                variant="primary"
+                                                                onClick={installLogging}
+                                                                isDisabled={loading}
+                                                                style={{marginTop: '10px'}}
+                                                            >
+                                                                {loading ? 'Installing...' : 'Install Temperature Logging'}
+                                                            </Button>
+                                                        </div>
+                                                    )}
+
+                                                    {loggingStatus.isInstalled && loggingStatus.lastReading && (
                                                         <div style={{marginTop: '10px', fontSize: '0.9em'}}>
-                                                            <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '10px', marginBottom: '10px'}}>
-                                                                <div>
-                                                                    <strong>Receiver Gain:</strong><br/>
-                                                                    {stats.gain_db.toFixed(1)} dB<br/>
-                                                                    <strong>PPM Correction:</strong><br/>
-                                                                    {stats.estimated_ppm.toFixed(1)} ppm
-                                                                </div>
-                                                                <div>
-                                                                    <strong>Started:</strong><br/>
-                                                                    {receiverInfo.uptime}<br/>
-                                                                    <strong>Current Aircraft:</strong><br/>
-                                                                    {stats.aircraft_with_pos + stats.aircraft_without_pos} total
-                                                                </div>
-                                                            </div>
-                                                        </div>
-                                                    )}
-                                                </CardBody>
-                                            </Card>
-                                        </GridItem>
-
-                                        {/* Signal Quality */}
-                                        <GridItem span={6}>
-                                            <Card>
-                                                <CardTitle>Signal Quality</CardTitle>
-                                                <CardBody>
-                                                    {stats && (
-                                                        <div>
-                                                            <Alert
-                                                                variant={getSignalQuality(stats.last1min.local.signal, stats.last1min.local.noise).level === 'Excellent' || getSignalQuality(stats.last1min.local.signal, stats.last1min.local.noise).level === 'Good' ? 'success' : getSignalQuality(stats.last1min.local.signal, stats.last1min.local.noise).level === 'Fair' ? 'warning' : 'danger'}
-                                                                title={`Signal Quality: ${getSignalQuality(stats.last1min.local.signal, stats.last1min.local.noise).level}`}
-                                                            />
-                                                            <div style={{marginTop: '10px', fontSize: '0.85em'}}>
-                                                                <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '8px', fontSize: '0.8em'}}>
-                                                                    <div style={{textAlign: 'center', padding: '6px', backgroundColor: '#f8f9fa', borderRadius: '4px'}}>
-                                                                        <div style={{fontWeight: 'bold', color: '#495057'}}>Signal</div>
-                                                                        <div style={{color: '#007bff', fontWeight: 'bold'}}>{stats.last1min.local.signal.toFixed(1)} dBFS</div>
-                                                                    </div>
-                                                                    <div style={{textAlign: 'center', padding: '6px', backgroundColor: '#f8f9fa', borderRadius: '4px'}}>
-                                                                        <div style={{fontWeight: 'bold', color: '#495057'}}>Noise</div>
-                                                                        <div style={{color: '#28a745'}}>{stats.last1min.local.noise.toFixed(1)} dBFS</div>
-                                                                    </div>
-                                                                    <div style={{textAlign: 'center', padding: '6px', backgroundColor: '#f8f9fa', borderRadius: '4px'}}>
-                                                                        <div style={{fontWeight: 'bold', color: '#495057'}}>Peak Signal</div>
-                                                                        <div style={{color: '#dc3545', fontWeight: 'bold'}}>{stats.last1min.local.peak_signal.toFixed(1)} dBFS</div>
-                                                                    </div>
-                                                                </div>
-                                                            </div>
-                                                        </div>
-                                                    )}
-                                                </CardBody>
-                                            </Card>
-                                        </GridItem>
-
-                                        {/* Live Statistics */}
-                                        <GridItem span={12}>
-                                            <Card>
-                                                <CardTitle>Current Activity (Last 1 minute)</CardTitle>
-                                                <CardBody>
-                                                    {stats && (
-                                                        <div style={{display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: '12px', fontSize: '0.85em'}}>
-                                                            <div style={{textAlign: 'center', padding: '8px', backgroundColor: '#e7f3ff', borderRadius: '8px', border: '1px solid #b3d9ff'}}>
-                                                                <div style={{fontWeight: 'bold', color: '#495057'}}>Aircraft with Position</div>
-                                                                <div style={{color: '#007bff', fontWeight: 'bold', fontSize: '1.2em'}}>{stats.aircraft_with_pos}</div>
-                                                            </div>
-                                                            <div style={{textAlign: 'center', padding: '8px', backgroundColor: '#e8f5e8', borderRadius: '8px', border: '1px solid #b3e6b3'}}>
-                                                                <div style={{fontWeight: 'bold', color: '#495057'}}>Messages</div>
-                                                                <div style={{color: '#28a745', fontWeight: 'bold', fontSize: '1.2em'}}>{formatNumber(stats.last1min.messages)}</div>
-                                                            </div>
-                                                            <div style={{textAlign: 'center', padding: '8px', backgroundColor: '#fff3e0', borderRadius: '8px', border: '1px solid #ffcc80'}}>
-                                                                <div style={{fontWeight: 'bold', color: '#495057'}}>Valid Positions</div>
-                                                                <div style={{color: '#ff9800', fontWeight: 'bold', fontSize: '1.2em'}}>{stats.last1min.position_count_total}</div>
-                                                            </div>
-                                                            <div style={{textAlign: 'center', padding: '8px', backgroundColor: '#fce4ec', borderRadius: '8px', border: '1px solid #f8bbd9'}}>
-                                                                <div style={{fontWeight: 'bold', color: '#495057'}}>Max Range</div>
-                                                                <div style={{color: '#e91e63', fontWeight: 'bold', fontSize: '1.2em'}}>{formatDistance(stats.last1min.max_distance)}</div>
-                                                            </div>
-                                                            <div style={{textAlign: 'center', padding: '8px', backgroundColor: '#f3e5f5', borderRadius: '8px', border: '1px solid #ce93d8'}}>
-                                                                <div style={{fontWeight: 'bold', color: '#495057'}}>Active Tracks</div>
-                                                                <div style={{color: '#9c27b0', fontWeight: 'bold', fontSize: '1.2em'}}>{stats.last1min.tracks.all}</div>
-                                                            </div>
-                                                            <div style={{textAlign: 'center', padding: '8px', backgroundColor: '#e0f2f1', borderRadius: '8px', border: '1px solid #80cbc4'}}>
-                                                                <div style={{fontWeight: 'bold', color: '#495057'}}>CPU Usage</div>
-                                                                <div style={{color: '#009688', fontWeight: 'bold', fontSize: '1.2em'}}>{((stats.last1min.cpu.demod + stats.last1min.cpu.reader + stats.last1min.cpu.background) / 1000).toFixed(1)}%</div>
-                                                            </div>
-                                                        </div>
-                                                    )}
-                                                </CardBody>
-                                            </Card>
-                                        </GridItem>
-
-                                        {/* Historical Statistics */}
-                                        <GridItem span={12}>
-                                            <Card>
-                                                <CardTitle>Historical Statistics</CardTitle>
-                                                <CardBody>
-                                                    {stats && (
-                                                        <div style={{display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: '16px', fontSize: '0.85em'}}>
-                                                            <div>
-                                                                <div style={{fontWeight: 'bold', marginBottom: '8px', textAlign: 'center', color: '#495057'}}>Last 1 min</div>
-                                                                <div style={{padding: '8px', backgroundColor: '#f8f9fa', borderRadius: '6px'}}>
-                                                                    <div><strong>Messages:</strong> {formatNumber(stats.last1min.messages)}</div>
-                                                                    <div><strong>Aircraft:</strong> {stats.aircraft_with_pos}</div>
-                                                                    <div><strong>Max Range:</strong> {formatDistance(stats.last1min.max_distance)}</div>
-                                                                    <div><strong>Signal:</strong> {stats.last1min.local.signal.toFixed(1)} dBFS</div>
-                                                                </div>
-                                                            </div>
-                                                            <div>
-                                                                <div style={{fontWeight: 'bold', marginBottom: '8px', textAlign: 'center', color: '#495057'}}>Last 5 min</div>
-                                                                <div style={{padding: '8px', backgroundColor: '#f8f9fa', borderRadius: '6px'}}>
-                                                                    <div><strong>Messages:</strong> {formatNumber(stats.last5min.messages)}</div>
-                                                                    <div><strong>Positions:</strong> {stats.last5min.position_count_total}</div>
-                                                                    <div><strong>Max Range:</strong> {formatDistance(stats.last5min.max_distance)}</div>
-                                                                    <div><strong>Signal:</strong> {stats.last5min.local.signal.toFixed(1)} dBFS</div>
-                                                                </div>
-                                                            </div>
-                                                            <div>
-                                                                <div style={{fontWeight: 'bold', marginBottom: '8px', textAlign: 'center', color: '#495057'}}>Last 15 min</div>
-                                                                <div style={{padding: '8px', backgroundColor: '#f8f9fa', borderRadius: '6px'}}>
-                                                                    <div><strong>Messages:</strong> {formatNumber(stats.last15min.messages)}</div>
-                                                                    <div><strong>Positions:</strong> {stats.last15min.position_count_total}</div>
-                                                                    <div><strong>Max Range:</strong> {formatDistance(stats.last15min.max_distance)}</div>
-                                                                    <div><strong>Signal:</strong> {stats.last15min.local.signal.toFixed(1)} dBFS</div>
-                                                                </div>
-                                                            </div>
-                                                            <div>
-                                                                <div style={{fontWeight: 'bold', marginBottom: '8px', textAlign: 'center', color: '#495057'}}>Total</div>
-                                                                <div style={{padding: '8px', backgroundColor: '#f8f9fa', borderRadius: '6px'}}>
-                                                                    <div><strong>Messages:</strong> {formatNumber(stats.total.messages)}</div>
-                                                                    <div><strong>Positions:</strong> {stats.total.position_count_total}</div>
-                                                                    <div><strong>Max Range:</strong> {formatDistance(stats.total.max_distance)}</div>
-                                                                    <div><strong>Tracks:</strong> {stats.total.tracks.all}</div>
-                                                                </div>
-                                                            </div>
+                                                            <div><strong>Last Reading:</strong> {loggingStatus.lastReading.timestamp}</div>
+                                                            <div><strong>Temperature:</strong> {loggingStatus.lastReading.thermalTemp.toFixed(1)}°C</div>
+                                                            <div><strong>Total Readings:</strong> {loggingStatus.recentReadings.length}</div>
                                                         </div>
                                                     )}
                                                 </CardBody>
                                             </Card>
                                         </GridItem>
                                     </Grid>
+                                </div>
+                            </Tab>
+                            
+                            <Tab eventKey={1} title={<TabTitleText>Temperature Graph</TabTitleText>}>
+                                <div style={{padding: '20px'}}>
+                                    {loggingStatus.isInstalled && loggingStatus.recentReadings.length > 0 ? (
+                                        <>
+                                            <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px'}}>
+                                                <h3>Temperature History</h3>
+                                                <select 
+                                                    value={timeRange} 
+                                                    onChange={(e) => setTimeRange(e.target.value)}
+                                                    style={{
+                                                        padding: '8px 12px',
+                                                        borderRadius: '4px',
+                                                        border: '1px solid #ccc',
+                                                        backgroundColor: 'white',
+                                                        fontSize: '14px',
+                                                        minWidth: '150px'
+                                                    }}
+                                                >
+                                                    <option value="1h">Last Hour</option>
+                                                    <option value="6h">Last 6 Hours</option>
+                                                    <option value="24h">Last 24 Hours</option>
+                                                    <option value="7d">Last 7 Days</option>
+                                                    <option value="all">All Time</option>
+                                                </select>
+                                            </div>
+                                            
+                                            <div style={{height: '400px'}}>
+                                                <Line data={getChartData()} options={chartOptions} />
+                                            </div>
+                                        </>
+                                    ) : (
+                                        <Card>
+                                            <CardBody style={{textAlign: 'center', padding: '60px'}}>
+                                                <div style={{color: '#666', fontSize: '1.2em'}}>
+                                                    {!loggingStatus.isInstalled ? (
+                                                        <p>Temperature logging is not installed. Please go to the Status tab to install it.</p>
+                                                    ) : (
+                                                        <p>No temperature data available yet. Please wait for data collection to begin.</p>
+                                                    )}
+                                                </div>
+                                            </CardBody>
+                                        </Card>
+                                    )}
                                 </div>
                             </Tab>
                         </Tabs>

@@ -5,7 +5,7 @@
 
     "tools": {
         "index": {
-            "label": "ADS-B Monitor",
+            "label": "Temperature Monitor",
             "path": "index.html"
         }
     }
