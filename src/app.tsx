@@ -133,8 +133,8 @@ export const Application = () => {
                     // Check if log file exists and get recent data
                     const logCheckProc = cockpit.spawn(['test', '-f', '/var/log/temperature/temperature.log'], { superuser: 'try' });
                     logCheckProc.done(() => {
-                        // Get recent readings
-                        const readLogProc = cockpit.spawn(['tail', '-100', '/var/log/temperature/temperature.log'], { superuser: 'try' });
+                        // Get recent readings - use more lines for longer time periods
+                        const readLogProc = cockpit.spawn(['tail', '-10000', '/var/log/temperature/temperature.log'], { superuser: 'try' });
                         readLogProc.done((data) => {
                             const lines = data.split('\n').filter(line => line && !line.startsWith('#'));
                             const recentReadings: TempReading[] = lines.map(line => {
@@ -442,7 +442,12 @@ find /var/log/temperature -name "*.log" -mtime +30 -delete 2>/dev/null
                                     {loggingStatus.isInstalled && loggingStatus.recentReadings.length > 0 ? (
                                         <>
                                             <div style={{display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px'}}>
-                                                <h3>Temperature History</h3>
+                                                <div>
+                                                    <h3>Temperature History</h3>
+                                                    <div style={{fontSize: '0.9em', color: '#666', marginTop: '5px'}}>
+                                                        Showing {filterReadingsByTimeRange(loggingStatus.recentReadings).length} of {loggingStatus.recentReadings.length} readings
+                                                    </div>
+                                                </div>
                                                 <select 
                                                     value={timeRange} 
                                                     onChange={(e) => setTimeRange(e.target.value)}
@@ -451,15 +456,28 @@ find /var/log/temperature -name "*.log" -mtime +30 -delete 2>/dev/null
                                                         borderRadius: '4px',
                                                         border: '1px solid #ccc',
                                                         backgroundColor: 'white',
+                                                        color: '#333',
                                                         fontSize: '14px',
-                                                        minWidth: '150px'
+                                                        fontWeight: '500',
+                                                        minWidth: '150px',
+                                                        cursor: 'pointer',
+                                                        boxShadow: '0 1px 2px rgba(0, 0, 0, 0.1)',
+                                                        transition: 'border-color 0.2s, box-shadow 0.2s'
+                                                    }}
+                                                    onFocus={(e) => {
+                                                        e.target.style.borderColor = '#0066cc';
+                                                        e.target.style.boxShadow = '0 0 0 2px rgba(0, 102, 204, 0.2)';
+                                                    }}
+                                                    onBlur={(e) => {
+                                                        e.target.style.borderColor = '#ccc';
+                                                        e.target.style.boxShadow = '0 1px 2px rgba(0, 0, 0, 0.1)';
                                                     }}
                                                 >
-                                                    <option value="1h">Last Hour</option>
-                                                    <option value="6h">Last 6 Hours</option>
-                                                    <option value="24h">Last 24 Hours</option>
-                                                    <option value="7d">Last 7 Days</option>
-                                                    <option value="all">All Time</option>
+                                                    <option value="1h" style={{color: '#333', backgroundColor: 'white'}}>Last Hour</option>
+                                                    <option value="6h" style={{color: '#333', backgroundColor: 'white'}}>Last 6 Hours</option>
+                                                    <option value="24h" style={{color: '#333', backgroundColor: 'white'}}>Last 24 Hours</option>
+                                                    <option value="7d" style={{color: '#333', backgroundColor: 'white'}}>Last 7 Days</option>
+                                                    <option value="all" style={{color: '#333', backgroundColor: 'white'}}>All Time</option>
                                                 </select>
                                             </div>
                                             
