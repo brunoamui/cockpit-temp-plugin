@@ -43,6 +43,7 @@ interface TempReading {
     timestamp: string;
     sensorsTemp: number | null;
     thermalTemp: number;
+    tmp102Temp?: number | null;
 }
 
 interface LoggingStatus {
@@ -57,6 +58,7 @@ interface LoggingStatus {
 interface CurrentTemperature {
     sensors: number | null;
     thermal: number;
+    tmp102?: number | null;
 }
 
 export const Application = () => {
@@ -93,11 +95,45 @@ export const Application = () => {
             const sensorsProc = cockpit.spawn(['sensors'], { superuser: 'try' });
             sensorsProc.done((data) => {
                 let sensorsTemp = null;
-                const tempLine = data.split('\n').find(line => line.includes('temp1:'));
-                if (tempLine) {
-                    const match = tempLine.match(/\+([0-9.]+)°C/);
-                    if (match) {
-                        sensorsTemp = parseFloat(match[1]);
+                let tmp102Temp = null;
+                
+                const lines = data.split('\n');
+                let inTmp102Section = false;
+                
+                for (let i = 0; i < lines.length; i++) {
+                    const line = lines[i];
+                    
+                    // Check if we're entering the TMP102 section
+                    if (line.toLowerCase().includes('tmp102')) {
+                        inTmp102Section = true;
+                        continue;
+                    }
+                    
+                    // Check if we're leaving the current section (empty line)
+                    if (line.trim() === '') {
+                        if (inTmp102Section) {
+                            inTmp102Section = false;
+                        }
+                        continue;
+                    }
+                    
+                    // Check if we're entering a new sensor section (not the adapter line for current sensor)
+                    if (line.toLowerCase().includes('adapter:') && inTmp102Section) {
+                        // This is the adapter line for the TMP102, don't exit the section
+                        continue;
+                    }
+                    
+                    // Parse temperature values
+                    if (line.includes('temp1:')) {
+                        const match = line.match(/\+([0-9.]+)\s*°?C/);
+                        if (match) {
+                            if (inTmp102Section) {
+                                tmp102Temp = parseFloat(match[1]);
+                            } else if (!sensorsTemp) {
+                                // First temp1 found (CPU sensors)
+                                sensorsTemp = parseFloat(match[1]);
+                            }
+                        }
                     }
                 }
 
@@ -109,7 +145,8 @@ export const Application = () => {
                     
                     setCurrentTemp({
                         sensors: sensorsTemp,
-                        thermal: thermalTemp
+                        thermal: thermalTemp,
+                        tmp102: tmp102Temp
                     });
                 });
             });
@@ -139,11 +176,19 @@ export const Application = () => {
                             const lines = data.split('\n').filter(line => line && !line.startsWith('#'));
                             const recentReadings: TempReading[] = lines.map(line => {
                                 const parts = line.split(',');
+                                // Handle both old format (3 columns) and new format (4 columns with TMP102)
                                 if (parts.length === 3) {
                                     return {
                                         timestamp: parts[0],
                                         sensorsTemp: parts[1] ? parseFloat(parts[1]) : null,
                                         thermalTemp: parseFloat(parts[2])
+                                    };
+                                } else if (parts.length === 4) {
+                                    return {
+                                        timestamp: parts[0],
+                                        sensorsTemp: parts[1] ? parseFloat(parts[1]) : null,
+                                        thermalTemp: parseFloat(parts[2]),
+                                        tmp102Temp: parts[3] ? parseFloat(parts[3]) : null
                                     };
                                 }
                                 return null;
@@ -244,26 +289,44 @@ find /var/log/temperature -name "*.log" -mtime +30 -delete 2>/dev/null
 
     const getChartData = () => {
         const filteredReadings = filterReadingsByTimeRange(loggingStatus.recentReadings);
+        const hasTmp102Data = filteredReadings.some(reading => reading.tmp102Temp !== undefined && reading.tmp102Temp !== null);
+        
+        const datasets = [
+            {
+                label: 'CPU Temperature (Thermal Zone)',
+                data: filteredReadings.map(reading => reading.thermalTemp),
+                borderColor: 'rgb(255, 99, 132)',
+                backgroundColor: 'rgba(255, 99, 132, 0.2)',
+                tension: 0.1,
+                borderWidth: 2,
+            },
+            {
+                label: 'CPU Temperature (Sensors)',
+                data: filteredReadings.map(reading => reading.sensorsTemp || null),
+                borderColor: 'rgb(54, 162, 235)',
+                backgroundColor: 'rgba(54, 162, 235, 0.2)',
+                tension: 0.1,
+                spanGaps: true,
+                borderWidth: 2,
+            },
+        ];
+        
+        // Add TMP102 environmental sensor if data is available
+        if (hasTmp102Data) {
+            datasets.push({
+                label: 'Environmental Temperature (TMP102)',
+                data: filteredReadings.map(reading => reading.tmp102Temp || null),
+                borderColor: 'rgb(75, 192, 192)',
+                backgroundColor: 'rgba(75, 192, 192, 0.2)',
+                tension: 0.1,
+                spanGaps: true,
+                borderWidth: 2,
+            });
+        }
         
         return {
             labels: filteredReadings.map(reading => new Date(reading.timestamp)),
-            datasets: [
-                {
-                    label: 'Thermal Zone Temperature',
-                    data: filteredReadings.map(reading => reading.thermalTemp),
-                    borderColor: 'rgb(255, 99, 132)',
-                    backgroundColor: 'rgba(255, 99, 132, 0.2)',
-                    tension: 0.1,
-                },
-                {
-                    label: 'Sensors Temperature',
-                    data: filteredReadings.map(reading => reading.sensorsTemp || null),
-                    borderColor: 'rgb(54, 162, 235)',
-                    backgroundColor: 'rgba(54, 162, 235, 0.2)',
-                    tension: 0.1,
-                    spanGaps: true,
-                },
-            ],
+            datasets: datasets,
         };
     };
 
@@ -379,12 +442,15 @@ find /var/log/temperature -name "*.log" -mtime +30 -delete 2>/dev/null
                                                             {getTempStatus(currentTempValue)}
                                                         </span>
                                                     </div>
-                                                    {currentTemp.sensors && (
-                                                        <div style={{fontSize: '0.9em', color: '#666'}}>
-                                                            Sensors: {currentTemp.sensors.toFixed(1)}°C | 
-                                                            Thermal: {currentTemp.thermal.toFixed(1)}°C
-                                                        </div>
-                                                    )}
+                                                    <div style={{fontSize: '0.9em', color: '#666', marginTop: '10px'}}>
+                                                        {currentTemp.sensors && (
+                                                            <div>CPU Sensors: {currentTemp.sensors.toFixed(1)}°C</div>
+                                                        )}
+                                                        <div>CPU Thermal: {currentTemp.thermal.toFixed(1)}°C</div>
+                                                        {currentTemp.tmp102 && (
+                                                            <div>Environment (TMP102): {currentTemp.tmp102.toFixed(1)}°C</div>
+                                                        )}
+                                                    </div>
                                                 </CardBody>
                                             </Card>
                                         </GridItem>
@@ -426,7 +492,10 @@ find /var/log/temperature -name "*.log" -mtime +30 -delete 2>/dev/null
                                                     {loggingStatus.isInstalled && loggingStatus.lastReading && (
                                                         <div style={{marginTop: '10px', fontSize: '0.9em'}}>
                                                             <div><strong>Last Reading:</strong> {loggingStatus.lastReading.timestamp}</div>
-                                                            <div><strong>Temperature:</strong> {loggingStatus.lastReading.thermalTemp.toFixed(1)}°C</div>
+                                                            <div><strong>CPU:</strong> {loggingStatus.lastReading.thermalTemp.toFixed(1)}°C</div>
+                                                            {loggingStatus.lastReading.tmp102Temp && (
+                                                                <div><strong>Environment:</strong> {loggingStatus.lastReading.tmp102Temp.toFixed(1)}°C</div>
+                                                            )}
                                                             <div><strong>Total Readings:</strong> {loggingStatus.recentReadings.length}</div>
                                                         </div>
                                                     )}
