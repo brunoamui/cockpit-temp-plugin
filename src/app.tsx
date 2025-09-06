@@ -170,11 +170,13 @@ export const Application = () => {
                     // Check if log file exists and get recent data
                     const logCheckProc = cockpit.spawn(['test', '-f', '/var/log/temperature/temperature.log'], { superuser: 'try' });
                     logCheckProc.done(() => {
-                        // Get recent readings - use more lines for longer time periods
-                        const readLogProc = cockpit.spawn(['tail', '-10000', '/var/log/temperature/temperature.log'], { superuser: 'try' });
+                        // Get recent readings from current log and archives - up to 50,000 lines for more history
+                        const readLogProc = cockpit.spawn(['sh', '-c', 'cat /var/log/temperature/temperature.log 2>/dev/null; zcat /var/log/temperature/temperature.log.*.gz 2>/dev/null | sort || true'], { superuser: 'try' });
                         readLogProc.done((data) => {
                             const lines = data.split('\n').filter(line => line && !line.startsWith('#'));
-                            const recentReadings: TempReading[] = lines.map(line => {
+                            
+                            // Parse all readings first
+                            const allReadings: TempReading[] = lines.map(line => {
                                 const parts = line.split(',');
                                 // Handle both old format (3 columns) and new format (4 columns with TMP102)
                                 if (parts.length === 3) {
@@ -193,6 +195,14 @@ export const Application = () => {
                                 }
                                 return null;
                             }).filter(reading => reading !== null) as TempReading[];
+                            
+                            // Sort by timestamp to ensure chronological order
+                            const sortedReadings = allReadings.sort((a, b) => 
+                                new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime()
+                            );
+                            
+                            // Keep last 30,000 readings (about 20+ days) for better performance
+                            const recentReadings = sortedReadings.slice(-30000);
                             
                             setLoggingStatus({
                                 isInstalled: true,
@@ -379,8 +389,17 @@ find /var/log/temperature -name "*.log" -mtime +30 -delete 2>/dev/null
             case '24h':
                 cutoffTime = new Date(now.getTime() - 24 * 60 * 60 * 1000);
                 break;
+            case '3d':
+                cutoffTime = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000);
+                break;
             case '7d':
                 cutoffTime = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+                break;
+            case '14d':
+                cutoffTime = new Date(now.getTime() - 14 * 24 * 60 * 60 * 1000);
+                break;
+            case '30d':
+                cutoffTime = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
                 break;
             default:
                 return readings;
@@ -545,7 +564,10 @@ find /var/log/temperature -name "*.log" -mtime +30 -delete 2>/dev/null
                                                     <option value="1h" style={{color: '#333', backgroundColor: 'white'}}>Last Hour</option>
                                                     <option value="6h" style={{color: '#333', backgroundColor: 'white'}}>Last 6 Hours</option>
                                                     <option value="24h" style={{color: '#333', backgroundColor: 'white'}}>Last 24 Hours</option>
+                                                    <option value="3d" style={{color: '#333', backgroundColor: 'white'}}>Last 3 Days</option>
                                                     <option value="7d" style={{color: '#333', backgroundColor: 'white'}}>Last 7 Days</option>
+                                                    <option value="14d" style={{color: '#333', backgroundColor: 'white'}}>Last 14 Days</option>
+                                                    <option value="30d" style={{color: '#333', backgroundColor: 'white'}}>Last 30 Days</option>
                                                     <option value="all" style={{color: '#333', backgroundColor: 'white'}}>All Time</option>
                                                 </select>
                                             </div>
